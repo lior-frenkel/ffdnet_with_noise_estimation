@@ -58,7 +58,7 @@ class FFDNetAdapter:
                        (represents estimated noise standard deviation per pixel)
         
         Returns:
-            Denoised image as numpy array in same shape as input
+            tuple: (denoised image as numpy array, average sigma value used)
         """
         # Ensure inputs are in the right format
         assert noisy_image.ndim == 3, "Noisy image must be [C,H,W]"
@@ -93,7 +93,7 @@ class FFDNetAdapter:
         # Convert back to numpy
         denoised_np = denoised_tensor.detach().cpu().numpy().squeeze()
         
-        return denoised_np
+        return denoised_np, noise_level
     
     def create_spatial_map_from_residual(self, denoised, noisy):
         """

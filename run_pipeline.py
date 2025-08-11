@@ -117,7 +117,7 @@ def process_image(img_path, ffdnet_adapter):
     
     # 3. Run FFDNet with the spatial noise map
     t_start = time.time()
-    denoised_ffdnet = ffdnet_adapter.denoise_with_map(img_noisy_np, noise_map)
+    denoised_ffdnet, avg_sigma = ffdnet_adapter.denoise_with_map(img_noisy_np, noise_map)
     t_ffdnet = time.time() - t_start
     
     # Calculate FFDNet PSNR
@@ -149,13 +149,13 @@ def process_image(img_path, ffdnet_adapter):
     
     plt.subplot(234)
     plt.imshow(noise_map.squeeze(), cmap='jet')
-    plt.title("Noise Map from DIP")
+    plt.title(f"Noise Map from DIP (avg σ={avg_sigma:.1f})")
     plt.colorbar(fraction=0.046, pad=0.04)
     plt.axis('off')
     
     plt.subplot(235)
     plt.imshow(denoised_ffdnet.squeeze(), cmap='gray')
-    plt.title(f"FFDNet (PSNR: {ffdnet_psnr:.2f} dB)")
+    plt.title(f"FFDNet (σ={avg_sigma:.1f}, PSNR: {ffdnet_psnr:.2f} dB)")
     plt.axis('off')
     
     plt.tight_layout()
@@ -169,6 +169,7 @@ def process_image(img_path, ffdnet_adapter):
         'image': Path(img_path).name,
         'dip_psnr': dip_psnr,
         'ffdnet_psnr': ffdnet_psnr,
+        'avg_sigma': avg_sigma,
         'dip_time': t_dip,
         'ffdnet_time': t_ffdnet
     }
@@ -205,28 +206,31 @@ def main():
     
     # Print summary
     print("\nSummary of Results:")
-    print("=" * 80)
-    print(f"{'Image':<20} {'DIP PSNR':>10} {'FFDNet PSNR':>15}")
-    print("-" * 80)
+    print("=" * 90)
+    print(f"{'Image':<20} {'DIP PSNR':>10} {'FFDNet PSNR':>15} {'Avg Sigma':>12}")
+    print("-" * 90)
     
     avg_dip_psnr = 0
     avg_ffdnet_psnr = 0
+    avg_sigma_all = 0
     
     for r in results:
-        print(f"{r['image']:<20} {r['dip_psnr']:>10.2f} {r['ffdnet_psnr']:>15.2f}")
+        print(f"{r['image']:<20} {r['dip_psnr']:>10.2f} {r['ffdnet_psnr']:>15.2f} {r['avg_sigma']:>12.1f}")
         
         avg_dip_psnr += r['dip_psnr']
         avg_ffdnet_psnr += r['ffdnet_psnr']
+        avg_sigma_all += r['avg_sigma']
     
     # Calculate averages
     if results:
         avg_dip_psnr /= len(results)
         avg_ffdnet_psnr /= len(results)
+        avg_sigma_all /= len(results)
         
-        print("-" * 80)
-        print(f"{'Average':<20} {avg_dip_psnr:>10.2f} {avg_ffdnet_psnr:>15.2f}")
+        print("-" * 90)
+        print(f"{'Average':<20} {avg_dip_psnr:>10.2f} {avg_ffdnet_psnr:>15.2f} {avg_sigma_all:>12.1f}")
     
-    print("=" * 80)
+    print("=" * 90)
     
     # Save summary to file
     results_dir = current_dir / "results"
@@ -239,14 +243,14 @@ def main():
         f.write("1. **DIP**: Deep Image Prior with SURE loss (default DIP method)\n")
         f.write("2. **FFDNet**: FFDNet with noise maps from DIP\n\n")
         f.write("## Results\n\n")
-        f.write(f"| {'Image':<20} | {'DIP PSNR':>10} | {'FFDNet PSNR':>15} |\n")
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|\n")
+        f.write(f"| {'Image':<20} | {'DIP PSNR':>10} | {'FFDNet PSNR':>15} | {'Avg Sigma':>12} |\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
         
         for r in results:
-            f.write(f"| {r['image']:<20} | {r['dip_psnr']:>10.2f} | {r['ffdnet_psnr']:>15.2f} |\n")
+            f.write(f"| {r['image']:<20} | {r['dip_psnr']:>10.2f} | {r['ffdnet_psnr']:>15.2f} | {r['avg_sigma']:>12.1f} |\n")
         
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|\n")
-        f.write(f"| {'Average':<20} | {avg_dip_psnr:>10.2f} | {avg_ffdnet_psnr:>15.2f} |\n\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
+        f.write(f"| {'Average':<20} | {avg_dip_psnr:>10.2f} | {avg_ffdnet_psnr:>15.2f} | {avg_sigma_all:>12.1f} |\n\n")
         
         # Add analysis section
         f.write("## Analysis\n\n")
