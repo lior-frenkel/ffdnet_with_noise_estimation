@@ -233,8 +233,8 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter, snap_iters=[], l
             psnr_values.append(psrn_gt_sm)
             optimizer.step()
 
-            if j in snap_iters:
-                save_visuals(last_outputs, j, loss_mode, out_dir=script_dir, img_name=img_name)
+            # if j in snap_iters:
+            #     save_visuals(last_outputs, j, loss_mode, out_dir=script_dir, img_name=img_name)
 
         return psnr_values
     else:

@@ -82,7 +82,7 @@ def main():
     
         if loss_mode == "sure":
             input_depth = 1
-            num_iter = 600
+            num_iter = 100
             lr = 0.001
             snap_iters = [0, 500, 1400]
         else:
