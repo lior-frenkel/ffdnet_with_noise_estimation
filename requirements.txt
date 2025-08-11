@@ -5,26 +5,26 @@ torch==2.2.2+cu121
 torchvision==0.17.2+cu121
 torchaudio==2.2.2+cu121
 
-# Core scientific computing
-numpy<2.0.0
-opencv-python
-scikit-image
-matplotlib
-Pillow
-tqdm
-pandas
+# Core scientific computing - pin NumPy to 1.x for compatibility
+numpy>=1.21.0,<2.0.0
+opencv-python>=4.5.0
+scikit-image>=0.18.0
+matplotlib>=3.3.0
+Pillow>=8.0.0
+tqdm>=4.60.0
+pandas>=1.3.0
 
 # Deep learning utilities
-tensorboard
-h5py
+tensorboard>=2.8.0
+h5py>=3.6.0
 
 # Image processing
-imageio
-scikit-learn
+imageio>=2.15.0
+scikit-learn>=1.0.0
 
 # Wavelet transforms
-PyWavelets
+PyWavelets>=1.3.0
 
 # Jupyter support (optional)
-jupyter
-ipykernel
+jupyter>=1.0.0
+ipykernel>=6.0.0
