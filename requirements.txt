@@ -1,0 +1,30 @@
+# FFDNet Spatial Noise Mapping Project Requirements
+# PyTorch with CUDA support
+-f https://download.pytorch.org/whl/cu121
+torch==2.2.2+cu121
+torchvision==0.17.2+cu121
+torchaudio==2.2.2+cu121
+
+# Core scientific computing
+numpy<2.0.0
+opencv-python
+scikit-image
+matplotlib
+Pillow
+tqdm
+pandas
+
+# Deep learning utilities
+tensorboard
+h5py
+
+# Image processing
+imageio
+scikit-learn
+
+# Wavelet transforms
+PyWavelets
+
+# Jupyter support (optional)
+jupyter
+ipykernel
