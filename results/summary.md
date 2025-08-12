@@ -11,16 +11,16 @@ This file contains the results of running the DIP-FFDNet pipeline on test images
 
 | Image                |   DIP PSNR |     FFDNet PSNR |    Avg Sigma |
 |--------------------|------------|-----------------|--------------|
-| 1_Cameraman256.png   |      27.13 |           27.91 |          6.1 |
-| 2_house.png          |      26.29 |           31.46 |          6.5 |
-| 3_peppers256.png     |      24.69 |           30.22 |          6.7 |
-| 4_Lena512.png        |      29.89 |           29.31 |          6.1 |
-| 5_barbara.png        |      26.80 |           28.83 |          6.4 |
-| 6_boat.png           |      26.91 |           28.78 |          6.4 |
-| 7_hill.png           |      27.48 |           28.63 |          6.3 |
-| 8_couple.png         |      26.52 |           28.91 |          6.4 |
+| 1_Cameraman256.png   |      26.83 |           29.56 |         26.0 |
+| 2_house.png          |      28.87 |           33.22 |         26.5 |
+| 3_peppers256.png     |      26.64 |           30.36 |         27.2 |
+| 4_Lena512.png        |      30.11 |           32.57 |         26.1 |
+| 5_barbara.png        |      26.86 |           29.81 |         27.2 |
+| 6_boat.png           |      27.59 |           29.99 |         26.8 |
+| 7_hill.png           |      27.92 |           29.81 |         26.6 |
+| 8_couple.png         |      26.70 |           29.81 |         27.3 |
 |--------------------|------------|-----------------|--------------|
-| Average              |      26.96 |           29.26 |          6.4 |
+| Average              |      27.69 |           30.64 |         26.7 |
 
 ## Analysis
 

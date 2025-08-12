@@ -47,6 +47,60 @@ class FFDNetAdapter:
         self.model.eval()
         
         print(f"FFDNet model loaded from {model_path}")
+
+    def create_spatial_map_from_residual(self, denoised, noisy, window_size=32):
+        """
+        Create a spatial noise map from a residual image using sliding window
+        
+        Args:
+            residual: Residual image (difference between original and denoised)
+            window_size: Size of the sliding window
+            
+        Returns:
+            Spatial noise map
+        """
+        # Ensure both are in range [0, 1]
+        if denoised.max() > 1.0:
+            denoised = denoised / 255.0
+        if noisy.max() > 1.0:
+            noisy = noisy / 255.0
+        
+        # Calculate absolute residual
+        residual = np.abs(denoised - noisy).squeeze(0)
+        
+        # For multi-channel, take mean across channels
+        if residual.ndim > 2 and residual.shape[0] > 1:
+            residual = np.mean(residual, axis=0, keepdims=True)
+        
+        # # Scale to noise map range [0, 75]
+        # # This scaling is based on empirical observations of typical noise levels
+        # noise_map = np.clip(residual * 75.0, 0, 75)
+
+        # Get image dimensions
+        h, w = residual.shape
+        
+        # Pad image to handle borders
+        pad_size = window_size // 2
+        padded = np.pad(residual, pad_size, mode='reflect')
+        
+        # Create output noise map
+        noise_map = np.zeros_like(residual)
+        
+        # Use sliding window to estimate local noise levels
+        stride = window_size // 2  # 50% overlap
+        for i in range(0, h, stride):
+            for j in range(0, w, stride):
+                # Extract window from padded image
+                window = padded[i:i+window_size, j:j+window_size]
+                
+                # Calculate local noise estimate (MAD estimator)
+                local_noise = np.sqrt(np.mean(window**2))
+                
+                # Update noise map
+                noise_map[i:min(i+stride, h), j:min(j+stride, w)] = local_noise
+        
+        # Multiply by 255 to get noise level in pixel range
+        return noise_map * 255
     
     def denoise_with_map(self, noisy_image, noise_map):
         """
@@ -80,7 +134,8 @@ class FFDNetAdapter:
         print(f"Using average noise level: {noise_level:.2f}")
         
         # Create the sigma tensor as expected by FFDNet
-        sigma = torch.full((1, 1, 1, 1), noise_level / 75.0).to(self.device)
+        sigma = torch.full((1, 1, 1, 1), noise_level / 255.0).to(self.device)
+        # sigma = torch.full((1, 1, 1, 1), noise_level).to(self.device)
         
         # Add batch dimension if needed
         if noisy_tensor.dim() == 3:
@@ -95,32 +150,32 @@ class FFDNetAdapter:
         
         return denoised_np, noise_level
     
-    def create_spatial_map_from_residual(self, denoised, noisy):
-        """
-        Create a spatial noise map from the residual between denoised and noisy images
+    # def create_spatial_map_from_residual(self, denoised, noisy):
+    #     """
+    #     Create a spatial noise map from the residual between denoised and noisy images
         
-        Args:
-            denoised: Denoised image as numpy array
-            noisy: Original noisy image as numpy array
+    #     Args:
+    #         denoised: Denoised image as numpy array
+    #         noisy: Original noisy image as numpy array
             
-        Returns:
-            Spatial noise map suitable for FFDNet
-        """
-        # Ensure both are in range [0, 1]
-        if denoised.max() > 1.0:
-            denoised = denoised / 255.0
-        if noisy.max() > 1.0:
-            noisy = noisy / 255.0
+    #     Returns:
+    #         Spatial noise map suitable for FFDNet
+    #     """
+    #     # Ensure both are in range [0, 1]
+    #     if denoised.max() > 1.0:
+    #         denoised = denoised / 255.0
+    #     if noisy.max() > 1.0:
+    #         noisy = noisy / 255.0
         
-        # Calculate absolute residual
-        residual = np.abs(denoised - noisy)
+    #     # Calculate absolute residual
+    #     residual = np.abs(denoised - noisy)
         
-        # For multi-channel, take mean across channels
-        if residual.ndim > 2 and residual.shape[0] > 1:
-            residual = np.mean(residual, axis=0, keepdims=True)
+    #     # For multi-channel, take mean across channels
+    #     if residual.ndim > 2 and residual.shape[0] > 1:
+    #         residual = np.mean(residual, axis=0, keepdims=True)
         
-        # Scale to noise map range [0, 75]
-        # This scaling is based on empirical observations of typical noise levels
-        noise_map = np.clip(residual * 75.0, 0, 75)
+    #     # Scale to noise map range [0, 75]
+    #     # This scaling is based on empirical observations of typical noise levels
+    #     noise_map = np.clip(residual * 75.0, 0, 75)
         
-        return noise_map
+    #     return noise_map
