@@ -109,9 +109,11 @@ def process_image(img_path, ffdnet_adapter):
     t_dip = time.time() - t_start
     print(f"DIP completed in {t_dip:.2f}s with PSNR: {dip_psnr:.2f} dB")
     
+    denoised_dip = denoised_dip.astype(np.float32)
+    
     # 2. Create noise map from residual
     t_start = time.time()
-    noise_map = ffdnet_adapter.create_spatial_map_from_residual(denoised_dip, img_noisy_np)
+    noise_map = ffdnet_adapter.estimate_noise_map(denoised_dip, img_noisy_np, method='mad', out='unit')
     t_map = time.time() - t_start
     print(f"Noise map created in {t_map:.2f}s")
     
@@ -119,12 +121,20 @@ def process_image(img_path, ffdnet_adapter):
     t_start = time.time()
     denoised_ffdnet, avg_sigma = ffdnet_adapter.denoise_with_map(img_noisy_np, noise_map)
     t_ffdnet = time.time() - t_start
+
+    # 3. Run FFDNet with the actual noise map
+    t_start = time.time()
+    denoised_ffdnet_oracle, _ = ffdnet_adapter.denoise_with_map(img_noisy_np, sigma_, actual_sigma=True)
+    t_ffdnet_oracle = time.time() - t_start
     
-    # Calculate FFDNet PSNR
+    # 4. Calculate PSNR
     ffdnet_psnr = compare_psnr(img_np.squeeze(), denoised_ffdnet.squeeze())
-    print(f"FFDNet completed in {t_ffdnet:.2f}s with PSNR: {ffdnet_psnr:.2f} dB")
+    print(f"FFDNet after DIP completed in {t_ffdnet:.2f}s with PSNR: {ffdnet_psnr:.2f} dB")
+    # Calculate FFDNet PSNR - oracle
+    ffdnet_oracle_psnr = compare_psnr(img_np.squeeze(), denoised_ffdnet_oracle.squeeze())
+    print(f"Oracle FFDNet completed in {t_ffdnet_oracle:.2f}s with PSNR: {ffdnet_oracle_psnr:.2f} dB")
     
-        # 5. Visualize and save results
+    # 5. Visualize and save results
     results_dir = current_dir / "results"
     results_dir.mkdir(exist_ok=True)
     
@@ -157,6 +167,11 @@ def process_image(img_path, ffdnet_adapter):
     plt.imshow(denoised_ffdnet.squeeze(), cmap='gray')
     plt.title(f"FFDNet (σ={avg_sigma:.1f}, PSNR: {ffdnet_psnr:.2f} dB)")
     plt.axis('off')
+
+    plt.subplot(236)
+    plt.imshow(denoised_ffdnet_oracle.squeeze(), cmap='gray')
+    plt.title(f"FFDNet (σ={sigma:.1f}, PSNR: {ffdnet_oracle_psnr:.2f} dB)")
+    plt.axis('off')
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=40)
@@ -169,9 +184,11 @@ def process_image(img_path, ffdnet_adapter):
         'image': Path(img_path).name,
         'dip_psnr': dip_psnr,
         'ffdnet_psnr': ffdnet_psnr,
+        'ffdnet_oracle_psnr': ffdnet_oracle_psnr,
         'avg_sigma': avg_sigma,
         'dip_time': t_dip,
-        'ffdnet_time': t_ffdnet
+        'ffdnet_time': t_ffdnet,
+        'ffdnet_oracle_time': t_ffdnet_oracle
     }
 
 def main():
@@ -206,31 +223,34 @@ def main():
     
     # Print summary
     print("\nSummary of Results:")
-    print("=" * 90)
-    print(f"{'Image':<20} {'DIP PSNR':>10} {'FFDNet PSNR':>15} {'Avg Sigma':>12}")
-    print("-" * 90)
+    print("=" * 120)
+    print(f"{'Image':<20} {'DIP PSNR':>10} {'FFDNet PSNR':>15} {'FFDNet Oracle':>15} {'Avg Sigma':>12}")
+    print("-" * 120)
     
     avg_dip_psnr = 0
     avg_ffdnet_psnr = 0
+    avg_ffdnet_oracle_psnr = 0
     avg_sigma_all = 0
     
     for r in results:
-        print(f"{r['image']:<20} {r['dip_psnr']:>10.2f} {r['ffdnet_psnr']:>15.2f} {r['avg_sigma']:>12.1f}")
+        print(f"{r['image']:<20} {r['dip_psnr']:>10.2f} {r['ffdnet_psnr']:>15.2f} {r['ffdnet_oracle_psnr']:>15.2f} {r['avg_sigma']:>12.1f}")
         
         avg_dip_psnr += r['dip_psnr']
         avg_ffdnet_psnr += r['ffdnet_psnr']
+        avg_ffdnet_oracle_psnr += r['ffdnet_oracle_psnr']
         avg_sigma_all += r['avg_sigma']
     
     # Calculate averages
     if results:
         avg_dip_psnr /= len(results)
         avg_ffdnet_psnr /= len(results)
+        avg_ffdnet_oracle_psnr /= len(results)
         avg_sigma_all /= len(results)
         
-        print("-" * 90)
-        print(f"{'Average':<20} {avg_dip_psnr:>10.2f} {avg_ffdnet_psnr:>15.2f} {avg_sigma_all:>12.1f}")
+        print("-" * 120)
+        print(f"{'Average':<20} {avg_dip_psnr:>10.2f} {avg_ffdnet_psnr:>15.2f} {avg_ffdnet_oracle_psnr:>15.2f} {avg_sigma_all:>12.1f}")
     
-    print("=" * 90)
+    print("=" * 120)
     
     # Save summary to file
     results_dir = current_dir / "results"
@@ -241,20 +261,24 @@ def main():
         f.write("This file contains the results of running the DIP-FFDNet pipeline on test images.\n\n")
         f.write("## Denoising Methods Compared\n\n")
         f.write("1. **DIP**: Deep Image Prior with SURE loss (default DIP method)\n")
-        f.write("2. **FFDNet**: FFDNet with noise maps from DIP\n\n")
+        f.write("2. **FFDNet**: FFDNet with noise maps from DIP\n")
+        f.write("3. **FFDNet Oracle**: FFDNet with true noise level (σ=25)\n\n")
         f.write("## Results\n\n")
-        f.write(f"| {'Image':<20} | {'DIP PSNR':>10} | {'FFDNet PSNR':>15} | {'Avg Sigma':>12} |\n")
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
+        f.write(f"| {'Image':<20} | {'DIP PSNR':>10} | {'FFDNet PSNR':>15} | {'FFDNet Oracle':>15} | {'Avg Sigma':>12} |\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
         
         for r in results:
-            f.write(f"| {r['image']:<20} | {r['dip_psnr']:>10.2f} | {r['ffdnet_psnr']:>15.2f} | {r['avg_sigma']:>12.1f} |\n")
+            f.write(f"| {r['image']:<20} | {r['dip_psnr']:>10.2f} | {r['ffdnet_psnr']:>15.2f} | {r['ffdnet_oracle_psnr']:>15.2f} | {r['avg_sigma']:>12.1f} |\n")
         
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
-        f.write(f"| {'Average':<20} | {avg_dip_psnr:>10.2f} | {avg_ffdnet_psnr:>15.2f} | {avg_sigma_all:>12.1f} |\n\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
+        f.write(f"| {'Average':<20} | {avg_dip_psnr:>10.2f} | {avg_ffdnet_psnr:>15.2f} | {avg_ffdnet_oracle_psnr:>15.2f} | {avg_sigma_all:>12.1f} |\n\n")
         
         # Add analysis section
         f.write("## Analysis\n\n")
-        if avg_ffdnet_psnr > avg_dip_psnr:
+        if avg_ffdnet_oracle_psnr > avg_ffdnet_psnr > avg_dip_psnr:
+            f.write("FFDNet Oracle (true noise level) > FFDNet (estimated noise) > DIP with SURE loss.\n")
+            f.write("This shows the importance of accurate noise estimation for FFDNet performance.\n")
+        elif avg_ffdnet_psnr > avg_dip_psnr:
             f.write("FFDNet with spatial noise maps from DIP provides better results than DIP alone.\n")
         else:
             f.write("DIP with SURE loss provides better results than FFDNet with spatial noise maps.\n")

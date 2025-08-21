@@ -60,7 +60,11 @@ class FFDNet(nn.Module):
 
         x = self.m_down(x)
         # m = torch.ones(sigma.size()[0], sigma.size()[1], x.size()[-2], x.size()[-1]).type_as(x).mul(sigma)
-        m = sigma.repeat(1, 1, x.size()[-2], x.size()[-1])
+        if sigma.shape[-1] == 1:
+            m = sigma.repeat(1, 1, x.size()[-2], x.size()[-1])
+        else:
+            m = self.m_down(sigma)
+            m = torch.mean(m, dim=1, keepdim=True)  # Average the 4 channels → (1,1,128,128)
         x = torch.cat((x, m), 1)
         x = self.model(x)
         x = self.m_up(x)
