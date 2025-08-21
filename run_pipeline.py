@@ -29,6 +29,101 @@ from deep_image_prior.utils.denoising_utils import (
     get_image, get_noisy_image, crop_image, pil_to_np, np_to_torch, torch_to_np
 )
 
+def run_noise2self(img_noisy_np, img_np):
+    """
+    Run Noise2Self denoising algorithm
+    Returns both the denoised image and PSNR value
+    """
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    import torch.nn.functional as F
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if len(img_noisy_np.shape) == 2:
+        img_noisy_np = img_noisy_np[None, None, :, :]
+    elif len(img_noisy_np.shape) == 3:
+        img_noisy_np = img_noisy_np[None, :, :, :]
+    
+    noisy_tensor = torch.from_numpy(img_noisy_np).float().to(device)
+    
+    class Noise2SelfNet(nn.Module):
+        def __init__(self):
+            super(Noise2SelfNet, self).__init__()
+            self.conv1 = nn.Conv2d(1, 128, 3, padding=1)
+            self.conv2 = nn.Conv2d(128, 128, 3, padding=1)
+            self.conv3 = nn.Conv2d(128, 128, 3, padding=1)
+            self.conv4 = nn.Conv2d(128, 128, 3, padding=1)
+            self.conv5 = nn.Conv2d(128, 128, 3, padding=1)
+            self.conv6 = nn.Conv2d(128, 1, 3, padding=1)
+            self.bn1 = nn.BatchNorm2d(128)
+            self.bn2 = nn.BatchNorm2d(128)
+            self.bn3 = nn.BatchNorm2d(128)
+            self.bn4 = nn.BatchNorm2d(128)
+            self.bn5 = nn.BatchNorm2d(128)
+            
+        def forward(self, x):
+            x = F.relu(self.bn1(self.conv1(x)))
+            x = F.relu(self.bn2(self.conv2(x)))
+            x = F.relu(self.bn3(self.conv3(x)))
+            x = F.relu(self.bn4(self.conv4(x)))
+            x = F.relu(self.bn5(self.conv5(x)))
+            x = self.conv6(x)
+            return x
+    
+    net = Noise2SelfNet().to(device)
+    optimizer = optim.Adam(net.parameters(), lr=0.0003, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.8)
+    criterion = nn.MSELoss()
+    
+    net.train()
+    for epoch in range(300):
+        h, w = noisy_tensor.shape[2], noisy_tensor.shape[3]
+        mask_h = torch.randint(0, h, (h//4,))
+        mask_w = torch.randint(0, w, (w//4,))
+        
+        input_tensor = noisy_tensor.clone()
+        target_tensor = noisy_tensor.clone()
+        
+        for i in mask_h:
+            for j in mask_w:
+                neighbors = []
+                if i > 0: neighbors.append(noisy_tensor[0, 0, i-1, j])
+                if i < h-1: neighbors.append(noisy_tensor[0, 0, i+1, j])
+                if j > 0: neighbors.append(noisy_tensor[0, 0, i, j-1])
+                if j < w-1: neighbors.append(noisy_tensor[0, 0, i, j+1])
+                
+                if neighbors:
+                    input_tensor[0, 0, i, j] = torch.stack(neighbors).mean()
+        
+        optimizer.zero_grad()
+        output = net(input_tensor)
+        
+        mask = torch.zeros_like(noisy_tensor, dtype=torch.bool)
+        for i in mask_h:
+            for j in mask_w:
+                mask[0, 0, i, j] = True
+        
+        loss = criterion(output[mask], target_tensor[mask])
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+    
+    net.eval()
+    with torch.no_grad():
+        denoised = net(noisy_tensor)
+        denoised_np = denoised.cpu().numpy().squeeze()
+        
+        if len(img_np.shape) == 2:
+            img_np_for_psnr = img_np
+        else:
+            img_np_for_psnr = img_np.squeeze()
+            
+        psnr = compare_psnr(img_np_for_psnr, denoised_np)
+    
+    return denoised_np, psnr
+
 def run_dip(img_path, loss_mode="sure"):
     """
     Run DIP denoising using the original implementation
@@ -81,9 +176,14 @@ def run_dip(img_path, loss_mode="sure"):
         denoised, noisy, clean, psnr = run_dip_denoising(img_path, loss_mode)
         return denoised, psnr
 
-def process_image(img_path, ffdnet_adapter):
+def process_image(img_path, ffdnet_adapter, denoising_method="dip"):
     """
     Process a single image through the pipeline
+    
+    Args:
+        img_path: Path to the image
+        ffdnet_adapter: FFDNet adapter instance
+        denoising_method: "dip" or "noise2self"
     """
     print(f"\nProcessing {Path(img_path).name}...")
     
@@ -96,24 +196,33 @@ def process_image(img_path, ffdnet_adapter):
     sigma_ = sigma / 255.0
     img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
     
-    # 1. Run DIP denoising with SURE loss
+    # 1. Run denoising (DIP or Noise2Self) with SURE loss or self-supervised
     t_start = time.time()
-    try:
-        denoised_dip, dip_psnr = run_dip(img_path, loss_mode="sure")
-    except Exception as e:
-        print(f"Error running DIP: {e}")
-        print("Using the internal implementation instead...")
-        from dip_ffdnet_pipeline import run_dip_denoising
-        denoised_dip, img_noisy_np, img_np, dip_psnr = run_dip_denoising(img_path, loss_mode="sure")
+    if denoising_method == "dip":
+        print("Running Deep Image Prior (DIP) denoising...")
+        try:
+            denoised_first, first_psnr = run_dip(img_path, loss_mode="sure")
+        except Exception as e:
+            print(f"Error running DIP: {e}")
+            print("Using the internal implementation instead...")
+            from dip_ffdnet_pipeline import run_dip_denoising
+            denoised_first, img_noisy_np, img_np, first_psnr = run_dip_denoising(img_path, loss_mode="sure")
+        method_name = "DIP"
+    elif denoising_method == "noise2self":
+        print("Running Noise2Self denoising...")
+        denoised_first, first_psnr = run_noise2self(img_noisy_np, img_np)
+        method_name = "Noise2Self"
+    else:
+        raise ValueError(f"Unknown denoising method: {denoising_method}")
     
-    t_dip = time.time() - t_start
-    print(f"DIP completed in {t_dip:.2f}s with PSNR: {dip_psnr:.2f} dB")
+    t_first = time.time() - t_start
+    print(f"{method_name} completed in {t_first:.2f}s with PSNR: {first_psnr:.2f} dB")
     
-    denoised_dip = denoised_dip.astype(np.float32)
+    denoised_first = denoised_first.astype(np.float32)
     
     # 2. Create noise map from residual
     t_start = time.time()
-    noise_map = ffdnet_adapter.estimate_noise_map(denoised_dip, img_noisy_np, method='mad', out='unit')
+    noise_map = ffdnet_adapter.estimate_noise_map(denoised_first, img_noisy_np, method='mad', out='unit')
     t_map = time.time() - t_start
     print(f"Noise map created in {t_map:.2f}s")
     
@@ -129,7 +238,7 @@ def process_image(img_path, ffdnet_adapter):
     
     # 4. Calculate PSNR
     ffdnet_psnr = compare_psnr(img_np.squeeze(), denoised_ffdnet.squeeze())
-    print(f"FFDNet after DIP completed in {t_ffdnet:.2f}s with PSNR: {ffdnet_psnr:.2f} dB")
+    print(f"FFDNet after {method_name} completed in {t_ffdnet:.2f}s with PSNR: {ffdnet_psnr:.2f} dB")
     # Calculate FFDNet PSNR - oracle
     ffdnet_oracle_psnr = compare_psnr(img_np.squeeze(), denoised_ffdnet_oracle.squeeze())
     print(f"Oracle FFDNet completed in {t_ffdnet_oracle:.2f}s with PSNR: {ffdnet_oracle_psnr:.2f} dB")
@@ -138,7 +247,7 @@ def process_image(img_path, ffdnet_adapter):
     results_dir = current_dir / "results"
     results_dir.mkdir(exist_ok=True)
     
-    output_path = results_dir / f"{Path(img_path).stem}_results.pdf"
+    output_path = results_dir / f"{Path(img_path).stem}_{method_name}_results.pdf"
     
     plt.figure(figsize=(20, 10))
     
@@ -153,13 +262,13 @@ def process_image(img_path, ffdnet_adapter):
     plt.axis('off')
     
     plt.subplot(233)
-    plt.imshow(denoised_dip.squeeze(), cmap='gray')
-    plt.title(f"DIP (PSNR: {dip_psnr:.2f} dB)")
+    plt.imshow(denoised_first.squeeze(), cmap='gray')
+    plt.title(f"{method_name} (PSNR: {first_psnr:.2f} dB)")
     plt.axis('off')
     
     plt.subplot(234)
     plt.imshow(noise_map.squeeze(), cmap='jet')
-    plt.title(f"Noise Map from DIP (avg σ={avg_sigma:.1f})")
+    plt.title(f"Noise Map from {method_name} (avg σ={avg_sigma:.1f})")
     plt.colorbar(fraction=0.046, pad=0.04)
     plt.axis('off')
     
@@ -182,20 +291,24 @@ def process_image(img_path, ffdnet_adapter):
     # Return results for summary
     return {
         'image': Path(img_path).name,
-        'dip_psnr': dip_psnr,
+        'method': method_name,
+        'first_psnr': first_psnr,
         'ffdnet_psnr': ffdnet_psnr,
         'ffdnet_oracle_psnr': ffdnet_oracle_psnr,
         'avg_sigma': avg_sigma,
-        'dip_time': t_dip,
+        'first_time': t_first,
         'ffdnet_time': t_ffdnet,
         'ffdnet_oracle_time': t_ffdnet_oracle
     }
 
-def main():
+def main(denoising_method="dip"):
     """
     Main function to run the pipeline on all test images
+    
+    Args:
+        denoising_method: "dip" or "noise2self"
     """
-    print("Starting DIP-FFDNet Pipeline")
+    print(f"Starting {denoising_method.upper()}-FFDNet Pipeline")
     print("=" * 40)
     
     # Find test images
@@ -218,37 +331,38 @@ def main():
     # Process each image
     results = []
     for img_path in test_images:
-        result = process_image(img_path, ffdnet_adapter)
+        result = process_image(img_path, ffdnet_adapter, denoising_method)
         results.append(result)
     
     # Print summary
+    method_display = results[0]['method'] if results else denoising_method.upper()
     print("\nSummary of Results:")
     print("=" * 120)
-    print(f"{'Image':<20} {'DIP PSNR':>10} {'FFDNet PSNR':>15} {'FFDNet Oracle':>15} {'Avg Sigma':>12}")
+    print(f"{'Image':<20} {f'{method_display} PSNR':>12} {'FFDNet PSNR':>15} {'FFDNet Oracle':>15} {'Avg Sigma':>12}")
     print("-" * 120)
     
-    avg_dip_psnr = 0
+    avg_first_psnr = 0
     avg_ffdnet_psnr = 0
     avg_ffdnet_oracle_psnr = 0
     avg_sigma_all = 0
     
     for r in results:
-        print(f"{r['image']:<20} {r['dip_psnr']:>10.2f} {r['ffdnet_psnr']:>15.2f} {r['ffdnet_oracle_psnr']:>15.2f} {r['avg_sigma']:>12.1f}")
+        print(f"{r['image']:<20} {r['first_psnr']:>12.2f} {r['ffdnet_psnr']:>15.2f} {r['ffdnet_oracle_psnr']:>15.2f} {r['avg_sigma']:>12.1f}")
         
-        avg_dip_psnr += r['dip_psnr']
+        avg_first_psnr += r['first_psnr']
         avg_ffdnet_psnr += r['ffdnet_psnr']
         avg_ffdnet_oracle_psnr += r['ffdnet_oracle_psnr']
         avg_sigma_all += r['avg_sigma']
     
     # Calculate averages
     if results:
-        avg_dip_psnr /= len(results)
+        avg_first_psnr /= len(results)
         avg_ffdnet_psnr /= len(results)
         avg_ffdnet_oracle_psnr /= len(results)
         avg_sigma_all /= len(results)
         
         print("-" * 120)
-        print(f"{'Average':<20} {avg_dip_psnr:>10.2f} {avg_ffdnet_psnr:>15.2f} {avg_ffdnet_oracle_psnr:>15.2f} {avg_sigma_all:>12.1f}")
+        print(f"{'Average':<20} {avg_first_psnr:>12.2f} {avg_ffdnet_psnr:>15.2f} {avg_ffdnet_oracle_psnr:>15.2f} {avg_sigma_all:>12.1f}")
     
     print("=" * 120)
     
@@ -256,33 +370,45 @@ def main():
     results_dir = current_dir / "results"
     results_dir.mkdir(exist_ok=True)
     
-    with open(results_dir / "summary.md", "w") as f:
-        f.write("# DIP-FFDNet Pipeline Comparison Results\n\n")
-        f.write("This file contains the results of running the DIP-FFDNet pipeline on test images.\n\n")
+    with open(results_dir / f"summary_{denoising_method}.md", "w") as f:
+        f.write(f"# {method_display}-FFDNet Pipeline Comparison Results\n\n")
+        f.write(f"This file contains the results of running the {method_display}-FFDNet pipeline on test images.\n\n")
         f.write("## Denoising Methods Compared\n\n")
-        f.write("1. **DIP**: Deep Image Prior with SURE loss (default DIP method)\n")
-        f.write("2. **FFDNet**: FFDNet with noise maps from DIP\n")
+        f.write(f"1. **{method_display}**: {method_display} denoising method\n")
+        f.write(f"2. **FFDNet**: FFDNet with noise maps from {method_display}\n")
         f.write("3. **FFDNet Oracle**: FFDNet with true noise level (σ=25)\n\n")
         f.write("## Results\n\n")
-        f.write(f"| {'Image':<20} | {'DIP PSNR':>10} | {'FFDNet PSNR':>15} | {'FFDNet Oracle':>15} | {'Avg Sigma':>12} |\n")
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
+        f.write(f"| {'Image':<20} | {f'{method_display} PSNR':>12} | {'FFDNet PSNR':>15} | {'FFDNet Oracle':>15} | {'Avg Sigma':>12} |\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 14 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
         
         for r in results:
-            f.write(f"| {r['image']:<20} | {r['dip_psnr']:>10.2f} | {r['ffdnet_psnr']:>15.2f} | {r['ffdnet_oracle_psnr']:>15.2f} | {r['avg_sigma']:>12.1f} |\n")
+            f.write(f"| {r['image']:<20} | {r['first_psnr']:>12.2f} | {r['ffdnet_psnr']:>15.2f} | {r['ffdnet_oracle_psnr']:>15.2f} | {r['avg_sigma']:>12.1f} |\n")
         
-        f.write("|" + "-" * 20 + "|" + "-" * 12 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
-        f.write(f"| {'Average':<20} | {avg_dip_psnr:>10.2f} | {avg_ffdnet_psnr:>15.2f} | {avg_ffdnet_oracle_psnr:>15.2f} | {avg_sigma_all:>12.1f} |\n\n")
+        f.write("|" + "-" * 20 + "|" + "-" * 14 + "|" + "-" * 17 + "|" + "-" * 17 + "|" + "-" * 14 + "|\n")
+        f.write(f"| {'Average':<20} | {avg_first_psnr:>12.2f} | {avg_ffdnet_psnr:>15.2f} | {avg_ffdnet_oracle_psnr:>15.2f} | {avg_sigma_all:>12.1f} |\n\n")
         
         # Add analysis section
         f.write("## Analysis\n\n")
-        if avg_ffdnet_oracle_psnr > avg_ffdnet_psnr > avg_dip_psnr:
-            f.write("FFDNet Oracle (true noise level) > FFDNet (estimated noise) > DIP with SURE loss.\n")
+        if avg_ffdnet_oracle_psnr > avg_ffdnet_psnr > avg_first_psnr:
+            f.write(f"FFDNet Oracle (true noise level) > FFDNet (estimated noise) > {method_display}.\n")
             f.write("This shows the importance of accurate noise estimation for FFDNet performance.\n")
-        elif avg_ffdnet_psnr > avg_dip_psnr:
-            f.write("FFDNet with spatial noise maps from DIP provides better results than DIP alone.\n")
+        elif avg_ffdnet_psnr > avg_first_psnr:
+            f.write(f"FFDNet with spatial noise maps from {method_display} provides better results than {method_display} alone.\n")
         else:
-            f.write("DIP with SURE loss provides better results than FFDNet with spatial noise maps.\n")
+            f.write(f"{method_display} provides better results than FFDNet with spatial noise maps.\n")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Allow command line argument to specify denoising method
+    denoising_method = "dip"  # default
+    if len(sys.argv) > 1:
+        method_arg = sys.argv[1].lower()
+        if method_arg in ["dip", "noise2self"]:
+            denoising_method = method_arg
+        else:
+            print(f"Unknown method '{method_arg}'. Using default 'dip'.")
+    
+    print(f"Running pipeline with {denoising_method} method...")
+    main(denoising_method)
