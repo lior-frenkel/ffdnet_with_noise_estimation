@@ -103,7 +103,7 @@ class FFDNetAdapter:
         # Multiply by 255 to get noise level in pixel range
         return noise_map * 255
     
-    def denoise_with_map(self, noisy_image, noise_map, actual_sigma=False):
+    def denoise_with_map(self, noisy_image, noise_map, scalar_sigma=False):
         """
         Denoise an image using a spatial noise map
         
@@ -111,7 +111,7 @@ class FFDNetAdapter:
             noisy_image: Noisy image as numpy array [C,H,W] in range [0,1]
             noise_map: Spatial noise map as numpy array [H,W] in range [0,75]
                        (represents estimated noise standard deviation per pixel)
-            actual_sigma: If True, use the true sigma
+            scalar_sigma: If True, use the true sigma
         
         Returns:
             tuple: (denoised image as numpy array, average sigma value used)
@@ -119,10 +119,10 @@ class FFDNetAdapter:
         # Ensure inputs are in the right format
         assert noisy_image.ndim == 3, "Noisy image must be [C,H,W]"
         
-        if not actual_sigma:
+        if not scalar_sigma:
             if noise_map.ndim == 2:
                 # Expand to [1,H,W]
-                noise_map = noise_map[np.newaxis, :, :]
+                noise_map = noise_map[None, None, :, :]
         
         # Ensure values are in correct range
         if noisy_image.max() > 1.0:
@@ -133,7 +133,7 @@ class FFDNetAdapter:
         
         ## Current FFDNet implementation expects a single noise level parameter (sigma)
         ## Calculate mean noise level from the spatial map
-        if actual_sigma:
+        if scalar_sigma:
             noise_level = noise_map * 255.0
             noise_map = torch.full((1, 1, 1, 1), noise_map).to(self.device)
         else:
